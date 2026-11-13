@@ -46,6 +46,11 @@ def _show(record: TaskMetric, remaining: int, answer_path: Path | None = None) -
         answer = f" ответ={shown}"
     elif answer_path is None and record.status != "skip-unsolvable":
         answer = " answer.txt не записан"
+    if record.note and not record.answer:
+        note = record.note.replace("\n", " ")
+        if len(note) > 160:
+            note = note[:160] + "..."
+        answer = f"{answer} {note}"
     print(
         f"{record.task_id} {record.status} счёт={record.cost} остаток={remaining}{answer}",
         flush=True,

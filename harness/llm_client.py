@@ -78,6 +78,17 @@ def _quiet_logs() -> None:
         loguru_logger.remove()
         loguru_logger.add(lambda _message: None, level="CRITICAL")
     except Exception:
+        pass
+    try:
+        from openjiuwen.core.common.logging.log_config import configure_log_config, get_log_config_snapshot
+
+        snapshot = get_log_config_snapshot()
+        snapshot["output"] = ["console"]
+        snapshot["interface_output"] = ["console"]
+        snapshot["performance_output"] = ["console"]
+        snapshot["log_path"] = "/tmp/openjiuwen-logs"
+        configure_log_config(snapshot)
+    except Exception:
         return
 
 

@@ -8,8 +8,10 @@ The model fixes the code. Three checks:
    a file in the task folder. ``find_spec`` is a last look, so a module that
    the catalog missed is still treated as present.
 3. A test assertion that does not call the library is already false. The AST
-   evaluates only literals and builtins (``len('abc') == 4``). A call into
+   evaluates only literals and builtins (``len('abc') == 4``). One call into
    the library is left for the model, because that function can be rewritten.
+   The same call with the same arguments and two different required results
+   cannot, so that task is unsolvable.
 """
 
 from __future__ import annotations
@@ -168,6 +170,17 @@ _SAFE_CALLS = {
     "sum": sum,
 }
 
+_EQUALITY = {
+    "assertEqual",
+    "assertEquals",
+    "assertListEqual",
+    "assertTupleEqual",
+    "assertSetEqual",
+    "assertDictEqual",
+    "assertMultiLineEqual",
+    "assertSequenceEqual",
+}
+
 _COMPARE = {
     "assertEqual": lambda left, right: left == right,
     "assertEquals": lambda left, right: left == right,
@@ -195,6 +208,8 @@ def _broken_test(text: str) -> str | None:
         tree = ast.parse(text)
     except SyntaxError:
         return "тест не разбирается, править его нельзя"
+    required: dict[tuple, object] = {}
+    rejected: dict[tuple, list[object]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -206,11 +221,104 @@ def _broken_test(text: str) -> str | None:
         except Exception:
             return f"тест нельзя починить: {ast.unparse(node)} падает"
         if any(value is _UNKNOWN for value in arguments):
+            conflict = _same_call_conflict(name, node.args, required, rejected)
+            if conflict:
+                return conflict
             continue
         holds = _assertion_holds(name, arguments)
         if holds is False:
             return f"тест нельзя починить: {ast.unparse(node)} не выполняется"
     return None
+
+
+def _same_call_conflict(
+    name: str,
+    args: list[ast.expr],
+    required: dict[tuple, object],
+    rejected: dict[tuple, list[object]],
+) -> str | None:
+    if len(args) < 2 or (name not in _EQUALITY and name != "assertNotEqual"):
+        return None
+    pair = _call_and_expected(args[0], args[1])
+    if pair is None:
+        return None
+    signature, expected, source = pair
+    if name == "assertNotEqual":
+        if signature in required and required[signature] == expected:
+            return f"тест нельзя починить: {source} не может вернуть {expected!r}"
+        banned = rejected.setdefault(signature, [])
+        if not any(item == expected for item in banned):
+            banned.append(expected)
+        return None
+    previous = required.get(signature, _MISSING)
+    if previous is not _MISSING and previous != expected:
+        return f"тест нельзя починить: {source} не может вернуть {previous!r} и {expected!r}"
+    if any(item == expected for item in rejected.get(signature, ())):
+        return f"тест нельзя починить: {source} не может вернуть {expected!r}"
+    if previous is _MISSING:
+        required[signature] = expected
+    return None
+
+
+def _call_and_expected(left: ast.expr, right: ast.expr) -> tuple[tuple, object, str] | None:
+    left_call = _call_signature(left)
+    right_call = _call_signature(right)
+    if left_call is not None and right_call is None:
+        value = _eval_pure(right)
+        if value is not _UNKNOWN:
+            return left_call, value, ast.unparse(left)
+    if right_call is not None and left_call is None:
+        value = _eval_pure(left)
+        if value is not _UNKNOWN:
+            return right_call, value, ast.unparse(right)
+    return None
+
+
+def _call_signature(node: ast.expr) -> tuple | None:
+    if not isinstance(node, ast.Call) or any(item.arg is None for item in node.keywords):
+        return None
+    callee = _callee(node.func)
+    if callee is None:
+        return None
+    try:
+        args = tuple(_freeze(_eval_pure(arg)) for arg in node.args)
+        keywords = tuple(sorted((item.arg, _freeze(_eval_pure(item.value))) for item in node.keywords))
+    except Exception:
+        return None
+    if any(item is _UNKNOWN for item in args) or any(value is _UNKNOWN for _, value in keywords):
+        return None
+    return callee, args, keywords
+
+
+def _callee(func: ast.expr) -> tuple[str, ...] | None:
+    parts: list[str] = []
+    node = func
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return tuple(reversed(parts))
+
+
+def _freeze(value: object) -> object:
+    if value is _UNKNOWN:
+        return _UNKNOWN
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, (str, int, float, bytes, type(None))):
+        return ("lit", value)
+    if isinstance(value, list):
+        return ("list", tuple(_freeze(item) for item in value))
+    if isinstance(value, tuple):
+        return ("tuple", tuple(_freeze(item) for item in value))
+    if isinstance(value, set):
+        return ("set", tuple(sorted((_freeze(item) for item in value), key=repr)))
+    if isinstance(value, dict):
+        pairs = ((_freeze(key), _freeze(item)) for key, item in value.items())
+        return ("dict", tuple(sorted(pairs, key=repr)))
+    return ("repr", repr(value))
 
 
 def _assert_name(func: ast.expr) -> str | None:
@@ -242,7 +350,12 @@ class _Unknown:
     pass
 
 
+class _Missing:
+    pass
+
+
 _UNKNOWN = _Unknown()
+_MISSING = _Missing()
 
 
 def _eval_pure(node: ast.expr) -> object:
