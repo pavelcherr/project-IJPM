@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.pyc
+.env
+.idea/
+.local/
+.DS_Store
+logs/
+correct_50/
+hard_100/
+**/answer.txt

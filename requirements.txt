@@ -1,0 +1,3 @@
+cryptography==48.0.1
+openjiuwen==0.1.19
+catboost==1.2.10

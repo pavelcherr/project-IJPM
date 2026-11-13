@@ -1,0 +1,14 @@
+.git
+.idea
+.local
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+.DS_Store
+logs
+correct_50
+hard_100
+tasks
+**/answer.txt
+Регламент соревнования.md
